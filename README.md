@@ -8,3 +8,5 @@ Arzon Francesco - 142439
 
 Instructions: <br>
 Extract dataset from **all_games.zip** inside **archive** folder
+
+Or download the dataset from Kaggle, <a href="https://www.kaggle.com/datasets/deepcontractor/top-video-games-19952021-metacritic">here</a>
