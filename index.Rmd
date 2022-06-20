@@ -1,0 +1,823 @@
+---
+title: "Videogame Sales Analysis"
+author: "Arzon Francesco - 142439"
+output:
+  revealjs::revealjs_presentation:
+    theme: night
+    highlight: tango
+    center: true
+    margin: 0.02
+    css: night.css
+    transition: none
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r libs, include=FALSE}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(tibble)
+library(kableExtra)
+library(tidyverse)
+library(tidytext)
+library(stringr)
+library(gridExtra)
+library(ggrepel)
+library(ggiraph)
+library(stringi)
+
+library(tm)
+library(SnowballC)
+library(wordcloud)
+library(RColorBrewer)
+library(wordcloud2)
+
+library(gifski)
+library(gganimate)
+library(transformr)
+```
+
+```{r}
+#Creazione template tema ggplot2
+tema_mio <- theme(
+  axis.text.x = element_text(
+    angle = 45,
+    vjust = 01,
+    hjust = 1
+  )
+)
+options(ggplot2.continuous.colour="viridis")
+options(ggplot2.continuous.fill = "viridis")
+
+```
+
+```{r tidy&clean,echo=FALSE}
+all_data <- as_tibble(read.csv("archive/all_games2.csv"))
+
+#Rimuovo spazi di formattazione
+all_data$summary<-trimws(all_data$summary,which = c("right"))
+
+#Tolgo gli spazi a sx/dx
+all_data$name<-trimws(all_data$name,which = c("right"))
+all_data$platform<-trimws(all_data$platform,which =c("both"))
+all_data$release_date<-trimws(all_data$release_date,which =c("both"))
+
+#Trasformo release_date in month, year ed elimino release_date in quanto ripetuto 
+all_data<-all_data %>% 
+  mutate(year=strtoi(stri_sub(all_data$release_date,-4,-1))) %>% 
+  mutate(month=word(all_data$release_date,1)) %>% 
+  select(-release_date)
+
+#Normalizzo user_score
+all_data<-all_data %>% rename(user_score=user_review) %>% filter(user_score!="tbd")
+all_data$user_score<-as.numeric(all_data$user_score)*10
+
+#Nuovo dataframe, più leggero 
+data <- subset(all_data, select = -summary)
+ 
+
+#Gruppi e vettori utili
+
+playstation_group <-c(
+  "PSP",
+  "PlayStation Vita",
+  "PlayStation",
+  "PlayStation 2",
+  "PlayStation 3",
+  "PlayStation 4",
+  "PlayStation 5"
+)
+nintendo_group <- c("Nintendo 64","GameCube","Game Boy Advance",
+                   "DS","3DS","Wii","Wii U","Switch")
+microsoft_group <- c("Xbox 360", "Xbox One", "Xbox", "Xbox Series X")
+sega_group <- c("Dreamcast")
+pc_group <- c("PC")
+google_group <- ("Stadia")
+
+all_platforms <- c(playstation_group,
+                  nintendo_group,
+                  microsoft_group,
+                  sega_group,
+                  pc_group,
+                  google_group)
+
+consoles<-unique(data$platform)
+release_year<-c(1996,1995,2006,1999,2005,2006,2013,NA,2017,2000,2013,2001,2001,2012,2001,2011,2020,2004,2011,2020,2005,2019)
+
+console_release_years<-data.frame(console=consoles,release_year=release_year)
+
+```
+
+```{r yet another datacleaning}
+#Filtro alcune entry siccome ci sono alcuni giochi per una determinata console registrati prima del rilascio di tale console; questo errore è dovuto al fatto che alcuni titoli hanno avuto il porting per una console next gen, ma la data di uscita segnata è quella della console precedente
+
+
+temp1 = vector("numeric", length(data$year))
+
+
+for (i in 1:length(temp1)) {
+  if (is.na(console_release_years[which(console_release_years$console == as.character(data[i, 2])), 2])) {
+    temp1[i] <- as.numeric(data[i, 5])
+    
+    
+  } else{
+    
+      #se gioco uscito prima console
+    if (as.numeric(data[i, 5]) < console_release_years[which(console_release_years$console == as.character(data[i, 2])), 2]) {
+      
+        #allora cambialo
+        temp1[i] <-console_release_years[which(console_release_years$console == as.character(data[i, 2])), 2]
+      
+    } else{
+      
+      temp1[i] <- as.numeric(data[i, 5])
+    }
+  }
+}
+
+data$year <- temp1
+
+```
+
+
+
+## Un po' di introduzione
+
+I videogiochi rappresentano una enorme percentuale nel settore dell'intrattenimento. Vista l'enorme offerta tra varientà e quantità di titoli, è difficile trovare un individuo che non abbia mai giocato.
+</br>
+</br>
+<b>Ma sono sempre stati così popolari? <br> Quali sono considerati i migliori giochi, e quali sono le piattaforme più gettonate?</b>
+
+## Il dataset
+
+In questa analisi ho utilizzato <a href="https://www.kaggle.com/datasets/deepcontractor/top-video-games-19952021-metacritic" >il dataset </a> contentente i punteggi degli utenti e dei ciritci di Metacritic ai videogiochi più comuni su console tra il 1995 ed il 2021, per provare a dare una risposta a queste domande.
+
+
+```{r first_look, echo=FALSE}
+
+all_colors<-c()
+#Creo il vettore che associa il colore della casa produttrice alla console
+for (platf in unique(data$platform)) {
+  
+  if (platf %in% playstation_group) {
+    all_colors <- append(all_colors, "#003791")
+  }
+  if (platf %in% nintendo_group) {
+    all_colors <- append(all_colors, "#e4000f")
+  }
+  if (platf %in% microsoft_group) {
+    all_colors <- append(all_colors, "#0e7a0d")
+  }
+  if (platf %in% sega_group) {
+    all_colors <- append(all_colors, "#999999")
+  }
+  if (platf %in% pc_group) {
+    all_colors <- append(all_colors, "#FFC000")
+  }
+  if (platf %in% google_group) {
+    all_colors <- append(all_colors, "#FF4C1D")
+  }
+}
+
+
+pretty_data <- data #just to be sure
+
+pretty_data$platform <-
+  cell_spec(
+    pretty_data$platform,
+    color = "white",align = "c",
+    background = factor(pretty_data$platform, unique(data$platform), all_colors)
+  )
+
+pretty_data$meta_score <-
+  cell_spec(
+    pretty_data$meta_score,
+    color = "white",align = "c",
+    background =  spec_color(pretty_data$meta_score)
+  )
+
+pretty_data$user_score<-
+  cell_spec(
+    pretty_data$user_score,
+    color="white",align="c",
+    background = spec_color(pretty_data$user_score)
+  )
+
+set.seed(123) #solo per avere un slice "bello"
+slice_sample(pretty_data,n=8) %>%
+  mutate() %>% 
+  kbl(escape = F, align = "c",) %>%
+  kable_styling() %>% 
+  column_spec(c(1,2,3,4,5,6),border_left ="0px",border_right = "0px")
+
+```
+
+## Distribuzione uscite 
+
+Si nota subito come il PC abbia un gran numero di uscite in più rispetto alle altre console...
+
+```{r distrib}
+data %>%
+  group_by(platform) %>%
+  summarise(counts = n()) %>%
+  arrange(desc(counts)) %>% 
+  ggplot(aes(x=factor(platform,levels = platform), y=counts,fill=counts)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = counts), vjust = -0.3,size=3) + theme(axis.text.x = element_text(
+    angle = 45,
+    vjust = 01,
+    hjust = 1
+  ))+labs(x="Platforms",y="n")
+
+```
+
+----
+
+Il divario tra PC e console viene colmato se nel confronto si considerano insieme tutte le console per ogni casa produttrice; Una console diventa obsoleta con il tempo, il PC no.
+
+```{r manufacturers, fig.height=6 ,fig.align = "center"}
+
+#Considerare il PC come singolo è un po' ingiusto, siccome al contrario delle console, è modulare ed upgradabile nel tempo. Infatti, andando ad osservare la distribuzione delle uscite dei giochi tenendo conto della casa produttrice di ogni console, la distribuzione è più omogenea
+
+data<-data %>%
+  mutate(
+    group = case_when(
+      platform %in% playstation_group ~ "playstation",
+      platform %in% nintendo_group ~ "nintendo",
+      platform %in% microsoft_group ~ "microsoft",
+      platform %in% sega_group ~ "sega",
+      platform %in% pc_group ~ "pc",
+      platform %in% google_group ~ "stadia",
+    )
+  )
+
+
+group_counts <- data %>%
+  group_by(group) %>%
+  summarise(counts = n()) %>%
+  arrange(desc(counts)) %>% 
+  select(group,counts)
+
+
+ggplot(group_counts, mapping = aes(x = factor(group, levels = group), y = counts,fill=group)) +
+  geom_bar(stat = "identity",show.legend = F) +
+  labs(x="Manufacturers",y="n")+
+  scale_fill_manual(values = c(
+    "#0e7a0d",
+    "#e4000f",
+    "#FFC000",
+    "#003791",
+    "#999999",
+    "#FF4C1D"
+  ))+
+  theme_light()
+
+groups<-unique(data$group)
+```
+<br>Dunque anche se singolarmente il pc ha più uscite, complessivamente le case produttrici di console riescono (più o meno) a competere.
+
+
+## Nel tempo?
+
+
+```{r time, fig.height=7, fig.width=12, message=FALSE, warning=FALSE}
+
+
+df=data.frame(consoles,release_year) %>% filter(consoles!="PC")
+#write.csv(df,"consoles.csv", row.names = FALSE)
+
+
+year_sales <- data %>% group_by(year) %>%
+  summarize(counts = n()) %>% mutate(dummy = 1)
+
+
+year_scores<-data %>% group_by(year) %>% 
+  summarize(avg=mean(meta_score)*10.91) %>% mutate(dummy=1)
+
+t1<-left_join(year_sales,df,by=c("year"="release_year")) %>% 
+  filter(consoles!="NA") %>% 
+  select(-dummy)
+
+grafico <-
+  ggplot(data = year_sales, aes(x = year, y = counts, group = 1)) +
+  geom_vline(xintercept = 1999, color = alpha("red", 0.5)) +  geom_vline(xintercept =2020, color = alpha("red", 0.5)) +
+  geom_line(color = "lightgrey") +
+  geom_point(aes( size = 1,color=counts), show.legend = F) +
+  ggrepel::geom_label_repel(
+    data = t1,
+    aes(x = t1$year, y = t1$counts, label = t1$consoles),size = 2.9, label.padding = unit(0.2, "lines")) +
+  scale_x_continuous(n.breaks = 14) +
+  theme_light()+labs(x="Year",y="n")
+
+grafico
+
+```
+
+Spike nel 1999 e Drop nel 2020: che è successo?
+
+## Ma quando vengono rilasciati i giochi?
+
+Il dataset fornisce anche il mese di rilascio del gioco
+
+```{r months}
+
+data %>% 
+  group_by(month) %>% 
+  summarise(count=n()) %>%
+  ggplot(aes(x=factor(month,levels = month.name),y=count,fill=count))+
+  geom_bar(stat = "identity",show.legend = F)+
+  labs(x="Month",y="n")+ 
+  theme(axis.text.x = element_text(
+    angle = 45,
+    vjust = 01,
+    hjust = 1
+  ))
+```
+
+## Declino console
+
+
+```{r downfall, fig.height=12}
+
+x <- list()
+
+for (i in 1:length(all_platforms)) {
+  x[[i]] <-data %>% 
+    select(c(year, platform,group)) %>% 
+    filter(platform == all_platforms[i]) %>%
+    group_by(year,group) %>% 
+    summarise(count = n(),.groups = "drop") %>% 
+    mutate(platform = all_platforms[i])
+}
+
+#Filtro alcune entry siccome ci sono alcuni giochi per una determinata console registrati prima del rilascio di tale console; questo errore è dovuto al fatto che alcuni titoli hanno avuto il porting per una console next gen, ma la data di uscita segnata è quella della console precedente
+bigdata <- do.call(rbind, x) %>% filter(count>8) 
+
+plotlines<-ggplot()+
+  ggiraph::geom_line_interactive(data=bigdata %>% filter(platform!="PC"),aes(x=year,y=count,group=platform,color=platform,tooltip=platform))+
+  ggiraph::geom_line_interactive(bigdata %>% filter(platform=="PC"),mapping=aes(year,count,tooltip=platform),color=alpha("gold",0.6),size=1)+
+  theme_light()+labs(x="Year",y="n")+theme(legend.position = "bottom",legend.title = element_blank())
+
+girafe(ggobj = plotlines,width_svg = 9)
+
+```
+
+. . .
+
+Il grafico risulta complicato da comprendere a prima vista, perciò proviamo a dividerlo ...
+
+----
+
+```{r 4graf,  fig.height=7, fig.width=12 }
+par(mar = c(4, 4, .1, .1))
+
+a<-bigdata %>% filter(group=="nintendo") %>% ggplot()+geom_line(aes(year,count,color=platform),size=0.7)+ggtitle("Nintendo")
+b<-bigdata %>% filter(group=="playstation") %>% ggplot()+geom_line(aes(year,count,color=platform),size=0.7)+ggtitle("PlayStation")
+c<-bigdata %>% filter(group=="microsoft") %>% ggplot()+geom_line(aes(year,count,color=platform),size=0.7)+ggtitle("Microsoft")
+d<-bigdata %>% filter(group=="pc") %>% ggplot()+geom_line(aes(year,count,color=platform),size=0.7)+ggtitle("PC")
+
+grid.arrange(a,b,c,d,nrow=2,ncol=2,top="By time, grouped by manufacturers")
+
+#bigdata %>% filter(group!="sega") %>% ggplot()+geom_line(aes(year,count,color=platform),size=0.7)+facet_wrap(~group)
+
+```
+
+
+## Declino manufacturers complessivamente
+
+```{r downfall2, fig.height=12, message=FALSE, warning=FALSE}
+
+x <- list()
+
+for (i in 1:length(groups)) {
+  x[[i]] <-
+    data %>% select(c(year,group)) %>% filter(group == groups[i]) %>% group_by(year) %>% summarise(count =n()) %>% 
+    mutate(group = groups[i])
+}
+
+
+bigdata <- do.call(rbind, x) %>% filter(count>1)
+
+plotlines<-ggplot()+
+  ggiraph::geom_line_interactive(data=bigdata ,aes(x=year,y=count,group=group,color=group,tooltip=group))+
+  theme_light()+
+  labs(x="Year",y="n")+
+  theme(legend.position = "bottom",legend.title = element_blank())
+
+girafe(ggobj = plotlines,width_svg = 9)
+
+```
+Spike Nintendo 2016 e continuità PC
+
+## Cambiamo approccio
+
+Se finora abbiamo studiato il dataset tramite tramite uscite/periodo e le piattaforme, passiamo ad analizzare i voti asseganti ai giochi. 
+
+
+## Punteggio medio (Meta)  per piattaforma
+
+
+```{r mean, echo=FALSE, fig.height=5, fig.width=12, message=FALSE, warning=FALSE}
+
+par(mar = c(4, 4, .1, .1))
+#compongo i dataframe
+m1 <- data %>% group_by(platform) %>%
+  summarise(avg = mean(meta_score)) %>% arrange(avg)
+
+m2 <- data %>% mutate(
+  group = case_when(
+    platform %in% playstation_group ~ "playstation",
+    platform %in% nintendo_group ~ "nintendo",
+    platform %in% microsoft_group ~ "xbox",
+    platform %in% sega_group ~ "sega",
+    platform %in% pc_group ~ "pc",
+    platform %in% google_group ~ "stadia",
+  )) %>%
+  group_by(group) %>%
+  summarize(avg = mean(meta_score)) %>% arrange(avg)
+
+
+#creo plots
+g1 <-
+  ggplot(m1, aes(x = factor(platform, levels = platform),y = avg,fill = avg)) +
+  geom_bar(stat = "identity", show.legend = F) +
+  geom_text(aes(label = round(avg, digits = 1)), vjust = -0.3, size =2.5)+ 
+  labs(x="Platforms", y = "Mean Score")+ theme_light()+tema_mio
+
+g2 <-
+  ggplot(m2, aes(x = factor(group, levels = group),y = avg,fill = group)) +
+  geom_bar(stat = "identity", show.legend = F) +
+  geom_text(aes(label = round(avg, digits = 1)), vjust = -0.4) + 
+  scale_fill_manual(values = c("#e4000f","#FFC000","#003791","#999999","#FF4C1D","#0e7a0d"))+
+  labs(x="Manufacturers", y="Mean Score" )+ theme_light()+tema_mio
+
+
+grid.arrange(g1, g2, nrow = 1)
+
+```
+
+
+## Alcuni dati sui voti
+
+Top 5 Metacritic
+
+```{r top5meta}
+top5meta<-data %>% arrange(desc(meta_score),user_score) 
+top5user <- data %>% arrange(desc(user_score))
+
+top5meta$meta_score <-cell_spec(top5meta$meta_score,color = "white",align = "c",background = spec_color(top5meta$meta_score,option = "D")) 
+top5meta$user_score <-cell_spec(top5meta$user_score,color = "white",align = "c",background = spec_color(top5meta$user_score,option = "D"))
+
+top5user$meta_score <-cell_spec(top5user$meta_score,color = "white",align = "c",background = spec_color(top5user$meta_score,option = "D"))
+top5user$user_score <-cell_spec(top5user$user_score,color = "white",align = "c",background = spec_color(top5user$user_score,option = "D"))
+
+top5meta %>% head(n=5) %>% 
+  kbl(escape = F, align = "c") %>%
+  kable_styling(full_width=T) %>% 
+  column_spec(c(1, 2, 3, 4, 5, 6, 7), border_left = "0px", border_right = "0px")
+```
+
+Top 5 Users
+
+```{r}
+top5user %>%head(n=5) %>% 
+  kbl(escape = F, align = "c" ) %>% kable_styling(full_width=T) %>%
+  column_spec(c(1, 2, 3, 4, 5, 6, 7), border_left = "0px", border_right = "0px")
+
+```
+
+---
+
+Worst 5 Metacritic
+
+```{r}
+worst5meta<-data %>% arrange(meta_score) 
+worst5user<-data %>% arrange(user_score) 
+
+
+worst5meta$meta_score<-cell_spec(worst5meta$meta_score,color="white",align = "c",background = spec_color(worst5meta$meta_score,option="D"))
+worst5meta$user_score<-cell_spec(worst5meta$user_score,color="white",align = "c",background = spec_color(worst5meta$user_score,option="A"))
+
+worst5user$meta_score<-cell_spec(worst5user$meta_score,color="white",align = "c",background = spec_color(worst5user$meta_score,option="D"))
+worst5user$user_score<-cell_spec(worst5user$user_score,color="white",align = "c",background = spec_color(worst5user$user_score,option="A"))
+
+worst5meta %>% head(n=5) %>% 
+  kbl(escape = F, align = "c") %>%
+  kable_styling(full_width=T) %>% 
+  column_spec(c(1, 2, 3, 4, 5, 6, 7), border_left = "0px", border_right = "0px")
+```
+
+Worst 5 Users
+
+```{r}
+worst5user %>%head(n=5) %>% 
+  kbl(escape = F, align = "c" ) %>% kable_styling(full_width=T) %>%
+  column_spec(c(1, 2, 3, 4, 5, 6, 7), border_left = "0px", border_right = "0px")
+
+```
+
+
+## Critics vs Users
+
+
+```{r}
+#bind_rows(data.frame(score=data$meta_score) %>% mutate(origin="meta"),data.frame(score=data$user_score)%>% mutate(origin="user")) %>% group_by(score,origin)%>% summarise(freq=n()) 
+
+quantili<-data.frame(meta=quantile(data$meta_score,names = FALSE),user=quantile(data$user_score,names = FALSE),q_perc=c("0%","25%","50%","75%","100%")
+)
+
+
+bind_rows(data.frame(score=data$meta_score) %>% mutate(origin="meta"),data.frame(score=data$user_score)%>% mutate(origin="user"))%>% 
+  ggplot(aes(x=score,group=origin,fill=origin,color=origin))+
+  geom_histogram(aes(y=..density..) ,binwidth = 1,alpha=0.4,position="identity")+  
+  geom_density(aes(x=score,color = origin),alpha=0.3, size = 1) +
+  scale_fill_manual(values = c("#00AFBB", "#E7B800")) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))+
+  geom_vline(data=quantili,aes(xintercept=meta ),linetype="dashed",color="#00AFBB")+
+  geom_vline(data=quantili,aes(xintercept=user ),linetype="dashed",color="#E7B800")+
+  geom_text(quantili,mapping=aes(x=meta,y=0.041,label=q_perc), vjust=1.5, angle=90, size=3.5, color="#00AFBB", inherit.aes=FALSE)+
+  geom_text(quantili,mapping=aes(x=user,y=0.041,label=q_perc), vjust=-0.5,angle=90, size=3.5, color="#E7B800", inherit.aes=FALSE)+
+  theme_light()
+
+#quantile(data$meta_score,names = TRUE)
+#quantile(data$user_score,names = TRUE)
+
+```
+
+---
+
+## Critics vs Users (platform)
+
+
+```{r diff}
+
+test2 <-
+  left_join(data %>% group_by(platform) %>% summarise(avg_user = round(mean(user_score), 2)) %>% arrange(avg_user),
+            data %>% group_by(platform) %>% summarise(avg_meta = round(mean(meta_score), 2)) %>% arrange(avg_meta),
+            by = "platform") %>%
+  mutate(diff = abs(avg_meta - avg_user)) %>%
+  arrange(diff) 
+
+
+ggplot(test2) +
+  geom_segment(aes(x = fct_reorder(platform, diff),xend = fct_reorder(platform, diff),y = avg_meta,yend = avg_user),color = "darkgray",size=0.5) +
+  
+  geom_point(aes(x = fct_reorder(platform, diff), y = avg_meta), color = "#00AFBB", size = 3) +
+  geom_point(aes(x = fct_reorder(platform, diff), y = avg_user), color = "#E7B800", size = 3) +  
+  
+  labs(title="Distance between mean Meta/User per Console",x="Platform",y="Avg score")+
+  geom_text(mapping = aes(x=platform,y=ifelse(avg_meta>avg_user,avg_meta+1,avg_meta-1),label=round(diff,1)),size=3,fontface="bold")+
+  
+  geom_label(aes(x="Wii",y=80,label="META"),fill="#00AFBB",color="white")+
+  geom_label(aes(x="PlayStation 2",y=80,label="USER"),fill="#E7B800",color="white")+theme_light()+tema_mio
+
+
+
+
+```
+
+## Critics vs Users (time)
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+bind_rows(
+  data.frame(data %>% group_by(year) %>%  summarize(avg = mean(meta_score)) %>% mutate(id = "meta")),
+  data.frame(data %>% group_by(year) %>%  summarize(avg = mean(user_score)) %>% mutate(id = "user"))) %>%
+  ggplot(aes(
+    x = year,
+    y = avg,
+    group = id,
+    color = id
+  )) +
+  geom_point(aes(x = year, y = avg)) +
+  labs(x="Year",y="Mean Score")+
+  geom_smooth(method = "lm", formula = y ~ poly(x, 2))+#magari geomsmooth vuoto
+   scale_fill_manual(values = c("#00AFBB", "#E7B800")) +
+   scale_color_manual(values = c("#00AFBB", "#E7B800"))+theme_light()
+
+```
+
+
+## Correlazione
+C'è una buona correlazione lineare tra i due recensori. Ma è sempre stato così?
+
+```{r correlation, echo=FALSE, message=FALSE}
+
+#Calcolo indice di correlazione lineare
+corr <-
+  paste("ρ = ", round(cor(
+    data$user_score,
+    data$meta_score,
+    method = c("pearson", "kendall", "spearman")
+  ), 2))
+
+  ggplot(
+    data, 
+    aes(x = user_score, y = meta_score, color = year)
+  ) + geom_point() + geom_smooth(
+    formula = y ~ x,
+    method = "lm",
+    col = "red"
+  ) + geom_text(aes(
+    x = 10, y = 95, label = corr
+  ), col = "red") + labs(x = "User Score", y = "Meta Score", title = "Coeff. Correlazione Lineare")+theme_light()
+  
+```
+
+## Correlazione lineare nel tempo
+
+```{r message=FALSE, warning=FALSE}
+corr_vector = vector("numeric", length(unique(data$year)))
+anni=sort(unique(data$year)) 
+
+for (i in 1:length(anni)) {
+  corr_vector[i]<-cor(    
+    filter(data, year < as.numeric(anni[i]+1))$user_score ,
+    filter(data, year < as.numeric(anni[i]+1))$meta_score,
+    method = c("pearson", "kendall", "spearman"))
+}
+corr_vector<- data.frame(anni,correlazione=corr_vector)
+
+corr_vector %>% ggplot(aes(anni,correlazione,color=correlazione)) +geom_point(size=3)+geom_smooth(method="lm",formula = y~x,se=FALSE,color=alpha("black",0.2))+theme_light()
+#ggplot(corr_vector)
+```
+
+A parte una iniziale indecisione, si stabilizza e poi c'è un declino
+
+---
+
+
+```{r message=FALSE, warning=FALSE}
+
+anim<-data %>% ggplot(aes(user_score,meta_score,color=year),add="reg.line")+
+  geom_point(show.legend = T)+
+  geom_smooth(method="lm",se=FALSE)+
+  labs(title = "Correlation in {closest_state}",x="User Score",y="Meta Score")+theme_bw()+
+  transition_states(year,transition_length =1,state_length = 25)
+
+animate(anim,renderer = gifski_renderer(),fps=5)
+
+
+```
+
+Scatterplot con modello lineare annuale
+
+## Reviews
+
+Infine diamo un'occhiata alle recensioni lasciate dai critici:
+
+```{r}
+all_data %>% select(name,summary) %>% head(n=5) %>% 
+  kbl(escape = F,align="l") %>%kable_styling() %>% 
+  column_spec(c(1,2),border_left="0px",border_right = "0px") %>% 
+  column_spec(2,width="100em") %>%
+  column_spec(1,width="2em") 
+
+```
+
+
+## Top words per sentiment
+
+
+```{r fig.height=8, fig.width=13}
+par(mar = c(4, 4, .1, .1))
+sentiment_freq<-rownames_to_column(all_data,var="id") %>% 
+  unnest_tokens(output= word, input= summary) %>% 
+  inner_join(get_sentiments("bing"), by = "word") %>% 
+  group_by(word,sentiment) %>% mutate(word=wordStem(word)) %>% count() %>% arrange(desc(n))
+ 
+ grid.arrange(
+  sentiment_freq %>% filter(sentiment=="positive")%>%  head(n=15) %>% 
+  ggplot(aes(x=factor(word,level=word),y=n)) + 
+  geom_bar(stat="identity",fill="#00BFC4")+tema_mio,
+  
+  sentiment_freq %>% filter(sentiment=="negative")%>%  head(n=15) %>% 
+  ggplot(aes(x=factor(word,level=word),y=n)) + 
+  geom_bar(stat="identity",fill="#F8766D")+tema_mio,
+  
+  nrow = 1)
+```
+
+
+## Sentiment Analysis, by platform
+
+
+```{r sentiment3}
+all_data$platform <- trimws(all_data$platform, which = c("right"))
+
+sentiment1<-rownames_to_column(all_data, var = "id") %>% group_by(platform) %>% 
+  unnest_tokens(output = word, input =summary) %>% 
+  inner_join(get_sentiments("bing"), by = "word") %>% 
+  group_by(sentiment) %>% group_by(platform, sentiment) %>% count()%>% 
+  pivot_wider(names_from = sentiment,values_from = n) %>% 
+  mutate(diff_perc=abs(positive-negative)*100/(positive+negative)) %>% 
+  mutate(sum=positive+negative) %>%
+  mutate(positive=positive*100/sum) %>% 
+  mutate(negative=negative*100/sum) %>% 
+  arrange(desc(diff_perc))
+
+
+
+sentiment1$platform<-factor(sentiment1$platform,levels = sentiment1$platform)
+
+ggplot(sentiment1)+
+  geom_segment(aes(x=platform,xend =platform ,y = positive,yend = negative),color = "darkgray",size=0.7) +
+  
+  geom_point(aes(x=platform,y=positive),color="#00BFC4",size=3)+
+  geom_point(aes(x=platform,y=negative),color="#F8766D",size=3)+
+  
+  geom_label(aes(x="PlayStation 4",y=60,label="Positive"),fill="#00BFC4",color="white")+
+  geom_label(aes(x="PlayStation 4",y=58,label="Negative"),fill="#F8766D",color="white")+
+  
+  geom_text(mapping = aes(x=platform,y=ifelse(positive>negative,positive+1,positive-1),label=round(diff_perc,1)),size=3,fontface="bold")+
+  
+  labs(x="Consoles",y="% of sentiment in reviews")+theme_light()+tema_mio
+
+```
+
+
+## Sentiment Analysis, by year
+
+
+```{r}
+
+sentiment2<-rownames_to_column(all_data, var = "id") %>% group_by(year) %>% 
+  unnest_tokens(output = word, input =summary) %>% 
+  inner_join(get_sentiments("bing"), by = "word") %>% 
+  group_by(sentiment) %>% group_by(year, sentiment) %>% count() %>% group_by(year) %>% 
+  pivot_wider(names_from = sentiment,values_from = n)%>% 
+  mutate(diff_perc=abs(positive-negative)*100/(positive+negative)) %>% 
+  mutate(sum=positive+negative) %>%
+  mutate(positive=positive*100/sum) %>% 
+  mutate(negative=negative*100/sum) %>% 
+  arrange(desc(diff_perc))
+
+ggplot(sentiment2)+
+  geom_segment(aes(x=year,xend=year,y=positive,yend=negative),color="darkgrey",size=0.7)+
+  geom_point(aes(x=year,y=positive),color="#00BFC4",size=3)+
+  geom_point(aes(x=year,y=negative),color="#F8766D",size=3)+
+  geom_label(aes(x=2018,y=65,label="Positive"),fill="#00BFC4",color="white")+
+  geom_label(aes(x=2018,y=62,label="Negative"),fill="#F8766D",color="white")+
+  
+  geom_text( aes(x=year,y=ifelse(positive>negative,positive+2,positive-2),label=round(diff_perc,1)),size=3,fontface="bold")+
+  
+  labs(x="Consoles",y="% of sentiment in reviews")+theme_light()
+
+
+```
+
+## Wordcloud
+
+```{r wordprocess, message=FALSE, warning=FALSE}
+text <- readLines("archive/out.txt")
+docs <- Corpus(VectorSource(text))
+toSpace <-content_transformer(
+  function (x , pattern)
+    gsub(pattern, " ", x)
+    )
+removableChars<-c("/","@","\\|")
+
+for (el in removableChars) {
+  docs<-tm_map(docs,toSpace,el)
+}
+
+
+# Minuscolo
+docs <- tm_map(docs, content_transformer(tolower))
+# Rimozione numeri
+docs <- tm_map(docs, removeNumbers)
+# Punteggiatura
+docs <- tm_map(docs, removePunctuation)
+# Spazi inutili
+docs <- tm_map(docs, stripWhitespace)
+# stopwords più comuni in inglese
+docs <- tm_map(docs, removeWords, stopwords("english"))
+
+docs <- tm_map(docs, removeWords, c("game","will","can","take","one","games","gameplay","yull","including")) 
+# Text stemming
+#docs <- tm_map(docs, stemDocument)
+
+
+
+dtm <- TermDocumentMatrix(docs)
+m <- as.matrix(dtm)
+v <- sort(rowSums(m),decreasing=TRUE)
+d <- data.frame(word = names(v),freq=v)
+#head(d, 10)
+#write.csv(d,"d.csv")
+
+```
+
+
+```{r wordcloud2, echo=FALSE, message=FALSE, warning=FALSE}
+
+wordcloud2(d,minSize = 6, color="random-light", backgroundColor ="transparent",shuffle = TRUE,ellipticity=0.6,gridSize = 6) 
+#BISOGNA REFRESHARE LA SLIDE
+```
+
+
+## Fine
+
+Grazie per l'attenzione.
