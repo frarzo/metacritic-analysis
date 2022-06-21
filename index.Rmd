@@ -1,5 +1,5 @@
 ---
-title: "Videogame Sales Analysis"
+title: "Videogame Reviews Analysis"
 author: "Arzon Francesco - 142439"
 output:
   revealjs::revealjs_presentation:
